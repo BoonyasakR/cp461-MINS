@@ -1,54 +1,69 @@
 import streamlit as st
 from PIL import Image
 import numpy as np
-import tensorflow as tf # Assuming 'model' is a TensorFlow/Keras model
-import os
+import tensorflow as tf
+from pathlib import Path
 
 st.title("MNIST Digit Predictor")
 st.write("Upload an image of a handwritten digit to get a prediction.")
 
-# Ensure the model is loaded (assuming 'model' is globally available or re-load it)
-# If 'model' is not loaded, you would need to load it here, e.g., model = tf.keras.models.load_model('path/to/your/model.h5')
-model_path = '6xxxx_mnist_model.keras'
-if not os.path.exists(model_path):
-    st.error(f"Model file '{model_path}' not found. Please ensure the model is saved correctly.")
-else:
-    model = tf.keras.models.load_model(model_path)
+# Resolve the model relative to this file so the app works regardless of the
+# directory from which Streamlit is started.
+MODEL_PATH = Path(__file__).resolve().parent / "671010165_mnist_model.keras"
+
+
+@st.cache_resource
+def load_model():
+    return tf.keras.models.load_model(MODEL_PATH)
+
+
+if not MODEL_PATH.is_file():
+    st.error(
+        f"Model file '{MODEL_PATH.name}' was not found. "
+        "Make sure 671010165_mnist_model.keras is included in the repository."
+    )
+    st.stop()
+
+try:
+    model = load_model()
+except Exception as exc:
+    st.error(f"Could not load the MNIST model: {exc}")
+    st.stop()
 
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
     try:
-        # Load the image
-        img = Image.open(uploaded_file)
-        st.image(img, caption='Uploaded Image', use_container_width=True)
-        st.write("")
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
         st.write("Classifying...")
 
-        # Convert to grayscale
-        img = img.convert('L')
+        # Convert to the same grayscale, 28x28 format used by MNIST.
+        image = image.convert("L").resize((28, 28))
+        image_array = np.asarray(image, dtype="float32")
 
-        # Resize to 28x28 pixels
-        img = img.resize((28, 28))
+        # MNIST digits are white on a black background. Invert photographs or
+        # drawings that use the opposite color scheme.
+        if image_array.mean() > 127:
+            image_array = 255 - image_array
 
-        # Convert to numpy array
-        img_array = np.array(img)
-        if img_array.mean() > 127: img_array = 255 - img_array  # invert black-on-white drawings
+        image_array = image_array / 255.0
 
-        # Normalize pixel values to [0, 255] to [0, 1]
-        img_array = img_array.astype("float32") / 255.0
+        # Support both common Keras MNIST input shapes: (28, 28) and
+        # (28, 28, 1).
+        if len(model.input_shape) == 4:
+            image_array = image_array.reshape(1, 28, 28, 1)
+        else:
+            image_array = image_array.reshape(1, 28, 28)
 
-        # Reshape for model prediction (add batch dimension)
-        img_array = img_array.reshape(1, 28, 28)
+        prediction = model.predict(image_array, verbose=0)
+        predicted_digit = int(np.argmax(prediction[0]))
+        confidence = float(np.max(prediction[0]))
 
-        # Make a prediction
-        prediction = model.predict(img_array)
+        st.success(
+            f"The model predicts the digit is: **{predicted_digit}** "
+            f"(confidence: {confidence:.1%})"
+        )
 
-        # Get the predicted digit
-        predicted_digit = np.argmax(prediction)
-
-        st.success(f"The model predicts the digit is: **{predicted_digit}**")
-
-    except Exception as e:
-        st.error(f"An error occurred during prediction: {e}. Please ensure the uploaded image is valid and the model is correctly loaded.")
-
+    except Exception as exc:
+        st.error(f"An error occurred during prediction: {exc}")
